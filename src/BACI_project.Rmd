@@ -1,0 +1,837 @@
+---
+html_document:
+  code_folding: show
+  toc: true
+  toc_depth: 2
+  toc_float:
+    collapsed: false
+    smooth_scroll: false
+autor: Luis Romero
+date: "2025-04-10"
+title: "Análisis de datos con RStudio - Proyecto BACI"
+---
+
+# Análisis de datos con RStudio - Proyecto BACI
+
+Los datos provistos por **BACI** nos muestran los flujos de intercambios realizados por dos países, en el cual intervienen cantidades y valores monetarios e información de la transacción de los más de 5000 productos validados por *"Harmonized System"*. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r cars}
+#limpio la memoria
+rm( list=ls())  #remove all objects
+gc()             #garbage collection
+
+# Seteo mismo wd para todos los chunks
+#knitr::opts_knit$set(root.dir = "~/Curso-R-Escuela-de-Verano-UNGS") 
+#knitr::opts_knit$set(root.dir = "~/Proyecto-BACI") 
+```
+
+```{r, warning=FALSE,message=FALSE}
+require(dplyr)
+require(ggplot2)
+require(purrr)
+require(readr)
+require(readxl)
+require(data.table)
+require(scales)
+```
+
+## Preparación de los datos
+
+Establecemos la ruta de nuestros archivos
+
+```{r}
+# Damos la ruta de nuestra carpeta de archivos 
+folder.path <- "../fuentes"  
+
+# Listamos los archivos que hay allí, todos no, los que nos interesan.
+bases.baci <- list.files(path = folder.path, pattern = "BACI.*", recursive = T, full.names = T)
+
+#bases.baci
+```
+
+Creamos una función `'buscar.archivo.pro'` que me busque archivos de la carpeta que elegiremos más adelante. También haremos uso de la función `'buscar.archivo.simple'` para no imprimir por consola que el archivo ha sido encontrado.
+
+```{r}
+# Función que me muestra si encontró o no la carpeta
+
+buscar.archivo.pro <- function(anio,hs){
+  pattern = sprintf("*BACI_HS%s_Y%s.*", hs, anio)
+  archivo.selec <- bases.baci[grepl(pattern = pattern, bases.baci )]
+  
+  if (length(archivo.selec)==0){
+    failure <- sprintf("No se encontró archivo para el año %s y HS%s", anio, hs)
+    print(failure)
+    return(NA)
+  }
+  else{
+    success <- sprintf("El archivo para el año %s y HS%s ha sido encontrado", anio, hs)
+    print(success)
+  return(archivo.selec)
+  }
+}
+
+# Esta función la usamos sabiendo que el archivo esta presente y no imprime por consola que la encontró 
+
+buscar.archivo.simple <- function(anio,hs){
+  pattern = sprintf("*BACI_HS%s_Y%s.*", hs, anio)
+  archivo.selec <- bases.baci[grepl(pattern = pattern, bases.baci )]
+  return(archivo.selec)
+}
+
+```
+
+Vamos a utilizar una primera aproximación al problema, **buscando las versiones disponibles que tenemos en nuestro filesystem**. Luego se muestran y elegiremos una de ellas
+
+```{r}
+buscar.versiones <- function(b.baci) {
+  vers <- c(substring(b.baci[1], 19, 20))
+
+  for (i in 2:length(b.baci)){
+    v <- substring(b.baci[i], 19, 20)
+    vers <- c(vers, v)
+  }
+  return(unique(vers))
+}
+
+versiones.total <- buscar.versiones(bases.baci)
+versiones.total
+```
+Elegimos una de ellas y averiguamos que años dispone para usarlo en nuestro estudio, guardamos esa información en un vector. Guardamos además, los años de la versión elegida en un vector. 
+
+```{r}
+####### Carga de datos ########
+version <- c('12')
+###############################
+
+buscar.anios <- function(vers, b.baci) {
+  as <- c()
+  
+  for (i in 1:length(bases.baci)){
+  if(substring(bases.baci[i], 19, 20) == vers) {
+    a <- substring(bases.baci[i], 41, 44)
+    as <- c(as, a)
+    }
+  }
+  return(as)
+}
+
+anios <- buscar.anios(version, bases.baci)
+anios
+```
+## Carga de datos 
+
+Para comenzar el ánalisis vamos a cargar los dataframes (df) para la `version` elegido. 
+
+```{r}
+# Código para cargar los dataframes (df) de todos los años, el último "df" queda en el último año. Imprime todos los df encontrados.
+
+# Itero sobre las versiones
+for (v in version){
+  
+  # Itero sobre los años
+  for (a in anios){
+    
+    # Busco archivo
+    archivo <- buscar.archivo.pro(anio = a, hs=v)
+    
+    # Si no es NA hago algo. 
+    if (!is.na(archivo)){
+      
+      # Llevo la versión a "HS.." para que quede completo. 
+      vers <- paste0("HS",v)
+     
+       # Leo el archivo, casteo la columna k como caracter, elimino el verbose y además le digo que me devuelva un data.frame y no un data.table. Todo eso con el método fread de data.table
+      
+      df <- fread(archivo, colClasses = c("k"="character"), showProgress = F, data.table = F)
+      
+      # Creo un df para renombrar las columnas
+      df.names <- df
+      
+      colnames(df.names)<-c('Año','Exportador','Importador','Producto','Valor','Cantidad') 
+    }
+  }
+}
+
+#df.names
+head(df.names)
+```
+
+Ésta última tabla corresponde al último año de la versión en estudio
+
+En la [documentación](http://www.cepii.fr/DATA_DOWNLOAD/baci/doc/DescriptionBACI.html) de BACI se puede ver qué es cada columna:
+
+-   t : año (dbl)
+
+-   k: código HS de producto (chr)
+
+-   i : código país exportador (dbl)
+
+-   j: código país importador (dbl)
+
+-   v: valor comercializado en miles de USD (dbl)
+
+-   q: toneladas comercializadas (dbl)
+
+Renombramos cada columna para una mejor visualización
+
+
+## Análisis de los datos 
+
+Asignamos a cada producto `k` su descripción provisto por el la variable `codes.productos`
+
+```{r}
+# Según que fecha se hayan descargados los archivos es probable que tuviesen una versión distinta. Lo averiguamos en la siguiente línea de código
+
+ver.folder <- substring(bases.baci[1], 46, 52)
+#ver.folder
+
+# Luego lo usamos para cargar nuevos archivos donde están las descripciones
+
+folder.path.prod = sprintf("../fuentes/BACI_HS%s_%s/product_codes_HS%s_%s.csv", version, ver.folder, version, ver.folder)
+
+# Cargamos códigos de los productos
+
+codes.productos <- read_csv(folder.path.prod, show_col_types = F)
+
+# Vemos cuantos valores distintos tenemos de 'k' 
+
+product_names <- df %>%  
+                 distinct(k) %>% 
+                 left_join(.,codes.productos , by = c(k="code")) %>% 
+                 select(k, description)
+
+product.names <- product_names
+
+colnames(product.names)<-c('Cod.','Descripción')
+
+#product.names
+head(product.names)
+
+```
+### Venta total de cada producto visto para cada año. 
+
+La función `tabla.suma.by.k` permite obtener la suma en cantidades de las exportaciones realizados por cada país, para cada código `k` y para todos los años
+
+```{r}
+tabla.suma.by.k <- function(versiones, ans){
+ 
+  # Defino un data.frame vacío. 
+  tabla_sum_anios <- data.frame()
+  
+  # Itero sobre las versiones
+  for (versions in versiones){
+    
+    # Itero sobre los anios
+    for (an in ans){
+        
+        # Busco archivo
+      archivo <- buscar.archivo.simple(anio = an, hs=versions)
+      
+      df <- fread(archivo, colClasses = c("k"="character"), showProgress = F, 
+                    data.table = F)
+        
+         # Agrupamos por porduct (k) y sumamos
+        
+      suma_value <- df %>% group_by(t,k) %>% 
+                      summarise(sum_v = sum(v, na.rm = T),  .groups = 'drop')
+        
+        # Anadimos a un dataframe la suma de todos los productos agrupados por cada año en un en un solo dataframe.
+        
+      tabla_sum_anios <- rbind(tabla_sum_anios, suma_value)  
+    }
+  }
+  
+  return(tabla_sum_anios)
+
+}
+
+k_sum_prod <- tabla.suma.by.k(version, anios) %>% 
+              left_join(.,codes.productos , by = c(k="code"))
+
+k_sum_prod.names <- k_sum_prod
+
+colnames(k_sum_prod.names)<-c('Año','Cod. Producto','Sum. Exp.','Descripción')
+
+#k_sum_prod.names
+head(k_sum_prod.names)
+
+```
+
+Podríamos estar interesados, por ejemplo, en la evolución de un producto a lo largo de los años, realizamos un gráfico para comprender su evolución.
+
+```{r}
+####### Carga de datos ########
+codigo <- '010239'
+############################### 
+
+# Graficamos la evolución de un la suma de cantidades para un producto (k) específico
+        
+graf_k <- k_sum_prod %>% filter(k == codigo) %>% 
+  ggplot(aes(x = t, y = sum_v)) + geom_line(color="blue", size=0.7)+
+  geom_point(color="blue", size=2) + 
+  labs(title = "Evolución de la cantidad exportada del producto") + 
+  xlab("Años") + ylab("Suma de valores ($)") + 
+  scale_x_continuous(breaks = seq(2012, 2023, by = 1))
+
+graf_k
+
+```
+
+### ¿Cuáles fueron los 5 productos más vendidos durante el período de años?
+
+```{r}
+top_5_prod <- k_sum_prod %>% group_by(k) %>% 
+              summarise(s = sum(sum_v, na.rm = T)) %>%
+  arrange(-s) %>%
+  head(k_sum_prod, n = 5L) %>%
+  left_join(.,codes.productos , by = c(k="code")) %>% 
+  select(k, description, s)
+
+top_5_prod.name <- top_5_prod
+
+colnames(top_5_prod.name) <- c('Producto','Descripción','Suma Valores')
+
+top_5_prod.name
+
+```
+Vamos a elaborar un dataframe donde se muestre la venta total de para cada producto del top 5 que realizó cada país que realizó exportación
+
+```{r}
+# Cargamos códigos de los países
+
+folder.path.country = sprintf("../fuentes/BACI_HS%s_%s/country_codes_%s.csv", version, ver.folder, ver.folder)
+
+codes.paises <- read_csv(folder.path.country,show_col_types = F)
+
+```
+
+La función `tabla.suma.by.top5k` me permite obtener la suma de exportaciones en cantidades de todos los países `i` para cada año `t`  y para cada uno de los productos del top 5
+
+```{r}
+tabla.suma.by.top5k <- function(versiones, ans, top){
+  
+  # Itero sobre las versiones
+  for (versions in versiones){
+    
+    # Defino un data.frame vacío. 
+    rank_total <- data.frame()
+  
+    for (code in top) {
+    
+      rank_sum <- data.frame()
+  
+      for (an in ans){
+      
+        archivo <- buscar.archivo.simple(anio = an, hs=versions)
+        
+        df <- fread(archivo, colClasses = c("k"="character"), showProgress = F, 
+                  data.table = F)
+      
+       # Agrupamos para un producto 'k' (del top 5) y sumamos -> sum_v_code
+        rank_code <- df %>%  
+          filter(k == code) %>%  
+          group_by(i,t) %>%
+          summarise(sum_v_code =  sum(v, na.rm = T),  .groups = 'drop') 
+        
+        # Añadimos año por año
+        rank_sum <- rbind(rank_sum, rank_code)
+        
+      }
+      # Añadimos la columna para el k iterado
+      rank_sum <- cbind(rank_sum, c(code))
+      
+      # Añadimos a los de mas k (códigos de los productos)
+      rank_total <- rbind(rank_total, rank_sum)
+    }
+  }
+  return(rank_total)
+}
+
+# Obtenemos la siguiente tabla
+
+sum_anio_byk <- tabla.suma.by.top5k (version, anios, top_5_prod$k) %>% rename('k' = 'c(code)')
+
+```
+A continuación mostramos el top 10 de países que exportaron en mayor cantidad los productos del top 5. Además anexamos en un gráfico la evolución que tuvieron en todos los años
+
+```{r}
+
+# Función que me devuelve el top 10 para cada 'k' y su evolución en gráfico
+
+tabla.top10.by.k <- function(df_resumen, top){
+  
+  #iteramos para cada k
+  for (code in top) {
+    
+    rank.k <- df_resumen %>% filter(k == code)
+    
+    rank.top <- rank.k %>% group_by(i) %>%
+      summarise(sum_v = sum(sum_v_code, na.rm = T),  .groups = 'drop') %>%
+      arrange(-sum_v) %>% head(rank.k, n=10L) %>%
+      left_join(.,codes.paises , by = c(i="country_code")) %>%
+      select(i, country_name, sum_v)
+    
+    rank.top.names <- rank.top
+
+    colnames(rank.top.names)<-c('Cod. País','País', 'Suma  de Valores ($)')
+    
+     print(sprintf("El producto *%s* cuyo código es *%s*, tiene el siguiente top 10 de paises que más vendieron", top_5_prod$description[which(top_5_prod$k == code)], top_5_prod$k[top_5_prod$k == code]))
+     
+     cat("\n")
+    
+    # Imprimimos el top 10
+    print(rank.top.names)
+    
+    rank.to.graph <- data.frame()
+    
+    # Recogemos los paises del top y lo guardamos para luego observar su              evolución
+    for (id in rank.top$i) {
+      
+      rank.k.i <- rank.k %>%
+        filter(rank.k$i== id) %>%
+        left_join(.,codes.paises , by = c(i="country_code")) %>%
+        select(k, country_name, t, sum_v_code)
+      
+      rank.to.graph <- rbind(rank.to.graph, rank.k.i)
+      }
+    
+    # Mostramos la grafica para cada producto (k)
+    graph.k.i.t <- ggplot(rank.to.graph, aes(t, sum_v_code, group=country_name, colour=country_name)) + 
+      geom_line() + geom_point() +
+      labs(title = "Evolución de la cantidad exportada del producto") +
+      xlab("Años") +  ylab("Suma de valores ($)") + scale_x_continuous(breaks = seq(2012, 2023, by = 1)) +
+      scale_y_continuous(labels = label_number()) +
+      guides(color = guide_legend(title = "Países"))
+    
+    print(graph.k.i.t)
+  }
+}
+
+# Top 10 de países y su evolución en el período de años
+
+rank_top10_k <- tabla.top10.by.k(sum_anio_byk, top_5_prod$k)
+```
+
+### Participación de un país con los productos del top 5.
+
+```{r}
+#Buscamos la posición del país elegido en el dataframe codes.paises
+
+####### Carga de datos ########
+country <- 'Peru'
+year <- 2017
+##############################
+  
+#Buscamos su posición
+pos_country <- which(codes.paises$country_name == country)
+
+#Función que me permite ver la participación del país elegido con el top 5 de productos
+
+tabla.country.by.k <- function(df_resumen, top){
+  
+  df_country <- data.frame()
+  
+  #iteramos para cada k
+  for (code in top) {
+    
+    tabla.by.k<- df_resumen %>%
+      filter(k==code, i==codes.paises$country_code[pos_country], t==year) %>%
+      group_by(i, k) %>% summarise(sum_v_code = sum(sum_v_code, na.rm = T) , .groups = 'drop')
+    
+    # Anexamos
+    df_country <- rbind(df_country, tabla.by.k)
+  }
+    df_country <- df_country %>%
+      left_join(.,codes.productos , by = c(k="code")) %>%
+      select(i, k, description, sum_v_code)
+    
+    return(df_country)
+}
+
+# Nos queda el total de ventas que vendió el país elegido para cada producto en el período de años
+
+df_country <- tabla.country.by.k(sum_anio_byk, top_5_prod$k)
+
+df_country.name <- df_country
+
+colnames(df_country.name) <- c('Cod. País','Producto','Descripción','Sum. Val. Export.')
+
+print(sprintf('Suma de valores exportados por *%s* para cada producto del top 5 en todos los años', country))
+
+df_country.name
+
+```
+
+Vamos a realizar una comparación del país elegido mostrando el porcentaje que vendió el país respecto a cada uno de los países del top 10. Por ejemplo para el producto **'270900'** *Arabia Saudi* (puesto 1) vendió, en *2017*, *238818248	toneladas*, en cambio *Argentina* vendió *3143184.328	toneladas*, es decir un **1.32%** de lo que vendió Arabia Saudi.
+
+La función `tabla.comp.each.k` compara la exportación de un producto (del top 5) para un determinado país con los países del top 10 para un determinado año elegido anteriormente, dicha comparación lo hace en forma porcentual.
+
+```{r}
+tabla.comp.each.k <- function(df_resumen, top, df_c){
+
+  #iteramos para cada k
+  for (code in top) {
+    
+    rank.k <- df_resumen %>% filter(k == code, t == year)
+    
+    rank.top <- rank.k %>% group_by(i) %>% 
+      summarise(sum_v = sum(sum_v_code, na.rm = T),  .groups = 'drop') %>%
+      arrange(-sum_v) %>%
+      head(rank.k, n=10L) %>%
+      left_join(.,codes.paises , by = c(i="country_code")) %>%
+      select(i, country_name, sum_v)
+    
+     print(sprintf("Comparación  en porcentaje de la venta que realizó *%s* del producto *%s* cuyo código es *%s* con los países en el top 10 durante el año *%s*", country, top_5_prod$description[which(top_5_prod$k == code)], code, year))
+    
+    # Buscamos la posición del 'k' para tomar su respectivo sum_v_code
+    pos <- which(df_c$k == code)
+    
+    rank.top.w.percent <- rank.top %>% 
+      mutate('%' = df_c$sum_v_code[pos]/sum_v*100)
+    rank.top.w.percent.name <- rank.top.w.percent
+
+    colnames(rank.top.w.percent.name) <- c('Cod. País','País Top5','Sum. Export.', 'Porcentaje (%)')
+    
+    # Imprimimos
+    print(rank.top.w.percent.name) 
+    cat("\n")
+  }
+}
+
+# Top 10 de países y su evolución
+tabla_comp.name <- tabla.comp.each.k(sum_anio_byk, top_5_prod$k, df_country)
+
+```
+
+Consideremos las regiones para nuestro estudio, es decir los continentes
+
+```{r}
+# Cargamos csv de las regiones
+folder.path.r <- "../fuentes/UNSD — Methodology.csv"
+
+codes.regiones <- read_csv(folder.path.r,show_col_types = F)
+
+#Pasamos a numérico
+codes.regiones$`M49 Code` <- as.numeric(codes.regiones$`M49 Code`)
+#class(codes.regiones$`M49 Code`)
+
+# Seleccionamos las columnas que nos interesan
+codes.regiones <-codes.regiones %>% select("Region Code", "Region Name", "M49 Code", "Country or Area")
+
+nombres_regiones <- c(codes.regiones %>% select("Region Name") %>% distinct())
+
+codes.regiones
+
+```
+
+### Top 5 de productos exportados (en valores y cantidades) por región para cada año. 
+
+La función `tabla.suma.v.by.k` para obtener la suma de los valores exportados `sum_v` para cada código `k` por cada país considerando todos los años.
+
+```{r}
+tabla.suma.v.by.k <- function(version, ans){
+ 
+  tabla_sum_anios <- data.frame()
+  
+  for (vers in version){
+    
+    for (an in ans){
+        
+      archivo <- buscar.archivo.simple(anio = an, hs=vers)
+      
+      df <- fread(archivo, colClasses = c("k"="character"), showProgress = F, 
+                    data.table = F)
+        
+      # Agrupamos 
+      suma_value <- df %>%
+        group_by(i,t,k) %>%
+        summarise(sum_v = sum(v, na.rm = T),  .groups = 'drop') 
+        
+      # Anadimos a un dataframe la suma  por cada año en un en un solo data frame.
+      tabla_sum_anios <- rbind(tabla_sum_anios, suma_value)  
+    }
+  }
+  return(tabla_sum_anios)
+}
+
+k_sum.v_by.i <- tabla.suma.v.by.k(version, anios) %>% left_join(.,codes.regiones , by = c(i="M49 Code")) 
+
+```
+
+La función`tabla.suma.q.by.k` para obtener la suma de las cantidades exportados `sum_q` para cada código `k` por cada pais considerando todos los años.
+
+```{r}
+
+tabla.suma.q.by.k <- function(version, an){
+ 
+  tabla_sum_anios <- data.frame()
+  
+  for (vers in version){
+    
+    for (an in anios){
+        
+      archivo <- buscar.archivo.simple(anio = an, hs=vers)
+      
+      df <- fread(archivo, colClasses = c("k"="character"), showProgress = F, 
+                    data.table = F)
+        
+      # Agrupamos 
+      suma_quant <- df %>%
+        group_by(i,t,k) %>%
+        summarise(sum_q = sum(q, na.rm = T),  .groups = 'drop')
+        
+      # Anadimos a un dataframe la suma  por cada año en un en un solo data frame.
+      tabla_sum_anios <- rbind(tabla_sum_anios, suma_quant)  
+    }
+  }
+  return(tabla_sum_anios)
+}
+
+k_sum.q_by.i <- tabla.suma.q.by.k(version, anios) %>%
+  left_join(.,codes.regiones , by = c(i="M49 Code")) 
+
+```
+
+Iteramos y hallamos el top 5 en valores, para cada año, de los productos exportados para cada una de las cinco regiones .
+
+```{r}
+
+for (nombre in nombres_regiones$`Region Name`){
+
+  tabla.sum.v.by.k.region <- function(sum.v_by.i, nombre, an){
+    
+    tabla_top_5_v = data.frame()
+      
+    tabla_resumen_v = data.frame()
+      
+      if (!is.na(nombre)) {
+      
+      for (a in an){
+             
+        top_5_value <- sum.v_by.i %>%
+          group_by(k, `Region Name`, t) %>%
+          filter(`Region Name`== nombre, t == a) %>%
+          summarise(sum_values = sum(sum_v, na.rm = T),  .groups = 'drop') %>%
+          arrange (-sum_values) %>% head(sum.v_by.i, n=5L)
+        
+        # Los unimos en una sola tabla, correspondiente al año presente
+             
+          tabla_top_5_v <- rbind(tabla_top_5_v, top_5_value)
+          
+      graph.top_5_v <- ggplot(tabla_top_5_v, aes(x=t, y=sum_values, color=k)) +
+        geom_point(show.legend = FALSE) +
+        facet_wrap(~k) +
+        labs(title = "Evolución del valor exportado del producto") +
+        xlab("Años") +
+        ylab("Suma de valores") + scale_x_continuous(breaks = seq(2012, 2023, by = 1)) + scale_y_continuous(labels = label_number()) +
+        theme(axis.text.x = element_text(angle = 90 ))
+          
+        resumen_top_5_value <- top_5_value %>%
+          group_by(`Region Name`) %>%
+          summarise(mean_values = mean(sum_values, na.rm = T))
+          
+        resumen_top_5_value <- cbind(c(a), resumen_top_5_value)
+          
+        tabla_resumen_v <- rbind(tabla_resumen_v, resumen_top_5_value)
+      }
+        colnames(tabla_top_5_v) <- c('Producto','Región','Año','Sum Val. Export.')
+        
+      print(sprintf("Top 5 de productos de la región *%s* en valores para cada año", nombre))
+      
+      print(tabla_top_5_v)
+      print(graph.top_5_v)
+      }
+    }
+
+  tabla_top_5_values <- tabla.sum.v.by.k.region (k_sum.v_by.i, nombre, anios)
+  tabla_top_5_values
+}
+
+```
+
+Con los gráficos obtenidos vemos que todas las regiones varían el top de productos en relación a los valores comercializados.
+
+```{r}
+# Iteramos y hallamos el top 5 en cantidades, para cada año, de los productos exportados para las cinco regiones
+
+for (nombre in nombres_regiones$`Region Name`){
+
+  tabla.sum.q.by.k.region <- function(sum.q_by.i, nombre, an){
+    
+    tabla_top_5_q = data.frame()
+      
+    tabla_resumen_q = data.frame()
+      
+      if (!is.na(nombre)) {
+      
+      for (a in an){
+             
+        top_5_quant <- sum.q_by.i %>%
+          group_by(k, `Region Name`, t) %>%
+          filter(`Region Name`== nombre, t == a) %>%
+          summarise(sum_quants = sum(sum_q, na.rm = T),  .groups = 'drop') %>%
+          arrange (-sum_quants) %>% head(sum.v_by.i, n=5L)
+        
+        # Los unimos en una sola tabla, correspondiente al año presente
+             
+          tabla_top_5_q <- rbind(tabla_top_5_q, top_5_quant)
+          
+      graph.top_5_q <- ggplot(tabla_top_5_q, aes(x=t, y=sum_quants, color=k)) +
+        geom_point(show.legend = FALSE) + facet_wrap(~k) +
+        labs(title = "Evolución de la cantidad exportada del producto") +
+        xlab("Años") +  ylab("Suma de cantidades") + scale_x_continuous(breaks = seq(2012, 2023, by = 1)) +
+        scale_y_continuous(labels = label_number()) +
+        theme(axis.text.x = element_text(angle = 90))
+          
+        resumen_top_5_quant <- top_5_quant %>% group_by(`Region Name`) %>%
+          summarise(mean_quants = mean(sum_quants, na.rm = T))
+        
+        resumen_top_5_quant <- cbind(c(a), resumen_top_5_quant)
+          
+        tabla_resumen_q <- rbind(tabla_resumen_q, resumen_top_5_quant)
+             
+      }
+        
+      colnames(tabla_top_5_q) <- c('Producto','Región','Año','Sum. Cant. Export.')
+       
+      print(sprintf("Top 5 de productos de la región *%s* en cantidades para cada año", nombre))
+      
+      print(tabla_top_5_q)
+      
+      print(graph.top_5_q)
+      }
+    }
+
+  tabla_top_5_quants <- tabla.sum.q.by.k.region (k_sum.q_by.i, nombre, anios)
+  tabla_top_5_quants
+}
+
+```
+
+Con los gráficos obtenidos vemos que para las regiones de *África* y *Océania* han habido cierta variedad en los top de productos en relación a las cantidades comercializadas, a diferencia de las demás regiones.
+
+### Precio Implícito
+
+Para hallar un *precio implícito* de cada producto vamos a calcular la relación entre valores monetarios exportados (10^3 **dólares**) y las cantidades en peso exportados (**ton**), por lo que se expresa el precio en 10^3 dólares/toneladas, o simplicando nos quedaría **dólares/kg**
+
+Mostramos un gráfico donde muestre la dispersión de los precios: `sum_v` v.s. `sum_q`para cada producto `k`.
+
+```{r}
+# Tabla que me permite tener el precio implícito considerando la suma de los valores de venta ($) dividiendo la cantidad vendida (kg) por lo que obtenemos un dataframe para cada producto y para cada año.
+
+tabla.precio <- function(vers, an){
+  
+  tabla_final <- data.frame()
+
+  # Itero sobre las versiones
+    for (v in vers){
+  
+  # Itero sobre los años
+    for (a in an){
+    
+      archivo <- buscar.archivo.simple(anio = a, hs=vers)
+    
+      df <- fread(archivo, colClasses = c("k"="character"), showProgress = F, 
+                  data.table = F)
+      
+      # Añadimos a un dataframe la suma de todos los productos, ya sea en valor y en cantidad, agrupados por cada año en un en un solo data.
+      suma_q2 <- df %>%
+        group_by(k,t) %>% #aqui si 't' para conservar solo un año
+        summarise(sum_q = sum(q, na.rm = T), .groups = 'drop')
+      
+      suma_v2 <- df %>%
+        group_by(k) %>%   #aqui no
+        summarise(sum_v = sum(v, na.rm = T), .groups = 'drop')
+      
+      tabla_suma_q2_v2 <- suma_q2 %>%left_join(.,suma_v2, by=c('k'='k'))
+      
+      # Por lo que tenemos dos tablas, la suma de valores y la de suma de               cantidades
+      tabla_final <- rbind(tabla_final, tabla_suma_q2_v2)
+      }
+    }
+  
+    # Obtenemos una tabla con la información del precio para todos los años
+      tabla_final <- tabla_final %>%
+        #distinct(k, sum_q, sum_v, t) %>%
+        mutate (p_imp = sum_v/sum_q) %>%
+        left_join(.,codes.productos , by = c(k="code")) %>%
+        select(k, t, sum_q, sum_v, p_imp, description)
+
+  return(tabla_final)
+}
+
+tabla.precio.imp <- tabla.precio(version, anios) %>% filter(sum_q > 0)
+tabla.precio.imp
+
+ggplot(data = tabla.precio.imp, mapping = aes(x = sum_q, y = sum_v)) +
+  geom_point() +
+  labs(title="Distribución de precios",
+         caption="Source: mpg",
+         x="Suma de cantidades (10^3 kg)",
+         y="Suma de valores (10^3 $)") +
+  scale_y_continuous(labels = label_number()) +
+  scale_x_continuous(labels = label_number())
+
+```
+
+Tabla que muestra el promedio del precio implícito de cada producto a lo largo de todos los años
+
+```{r}
+
+tabla.pr.imp.mean <- tabla.precio.imp %>%
+  group_by(k, description) %>%
+  summarise(mean.p_imp = mean(p_imp, na.rm = T),  .groups = 'drop')
+
+colnames(tabla.pr.imp.mean) <- c('Cod. Producto', 'Descripción','Prom. Precio Implícito ($/kg)')
+
+tabla.pr.imp.mean
+
+```
+
+¿Cual es precio promedio implícito más costoso?
+
+```{r}
+
+pr.imp_max <- which.max(tabla.pr.imp.mean$'Prom. Precio Implícito ($/kg)')
+
+cat("El valor máximo es el producto con código:", tabla.pr.imp.mean$'Cod. Producto'[pr.imp_max], 'correspondiente al producto', tabla.pr.imp.mean$'Descripción'[pr.imp_max], '; cuyo precio medio es', tabla.pr.imp.mean$'Prom. Precio Implícito ($/kg)'[pr.imp_max], '$/kg', "\n")
+
+```
+
+¿Cual es precio promedio implícito más barato? 
+
+```{r}
+
+pr.imp_min <- which.min(tabla.pr.imp.mean$'Prom. Precio Implícito ($/kg)')
+
+cat("El valor mínimo es el producto con código:", tabla.pr.imp.mean$'Cod. Producto'[pr.imp_min], 'correspondiente al producto', tabla.pr.imp.mean$'Descripción'[pr.imp_min], '; cuyo precio medio es', tabla.pr.imp.mean$'Prom. Precio Implícito ($/kg)'[pr.imp_min], '$/kg')
+
+
+```
+
+Evolución de precio de un producto `k` a lo largo de de los años
+
+```{r}
+####### Carga de datos ########
+cod.producto <- '290329'
+###############################
+
+tabla.product <- tabla.precio.imp %>% filter(k == cod.producto)
+
+ggplot(data = tabla.product, mapping = aes(x = t, y = p_imp)) +
+  geom_point() +
+  labs(title="Evolución del precio implícito promedio según el año", 
+         #subtitle = ,
+         caption="Source: mpg",
+         x="Años",
+         y="Precio Implícito ($/kg)") +
+  scale_y_continuous(labels = label_number()) +
+  scale_x_continuous(labels = label_number(), breaks = seq(2012, 2023, by = 1))
+
+```
+
