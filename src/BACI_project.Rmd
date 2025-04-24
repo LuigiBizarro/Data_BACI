@@ -27,7 +27,7 @@ gc()             #garbage collection
 
 # Seteo mismo wd para todos los chunks
 #knitr::opts_knit$set(root.dir = "~/Curso-R-Escuela-de-Verano-UNGS") 
-#knitr::opts_knit$set(root.dir = "~/Proyecto-BACI") 
+#knitr::opts_knit$set(root.dir = "~") 
 ```
 
 ```{r, warning=FALSE,message=FALSE}
@@ -512,7 +512,7 @@ Consideremos las regiones para nuestro estudio, es decir los continentes
 
 ```{r}
 # Cargamos csv de las regiones
-folder.path.r <- "../fuentes/UNSD — Methodology.csv"
+folder.path.r <- "../src/UNSD — Methodology.csv"
 
 codes.regiones <- read_csv(folder.path.r,show_col_types = F)
 
