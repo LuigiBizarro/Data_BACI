@@ -31,7 +31,7 @@ gc()             #garbage collection
 ```
 
 ```{r, warning=FALSE,message=FALSE}
-require(dplyr)
+userequire(dplyr)
 require(ggplot2)
 require(purrr)
 require(readr)
